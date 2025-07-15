@@ -1,0 +1,461 @@
+Ez egy jó kiindulási alap, de van benne néhány pont, amit érdemes átgondolni és finomítani, hogy robusztusabb és rugalmasabb legyen az adatbázisod.
+
+Nézzük át pontról pontra a javasolt séma elemeit, és tegyünk javaslatokat a fejlesztésekre:
+
+Az aktuális séma elemzése:
+1. konyvek tábla:
+
+id (bigint): Rendben van, ez lesz a primer kulcs.
+
+konyv_kep (varchar): Ha ez a borítókép URL-je vagy fájlneve, akkor rendben van a varchar. Azonban soha ne tárolj tényleges képfájlokat (BLOB-okat) adatbázisban varchar-ként, vagy általában sem, mert nagyon megnöveli az adatbázis méretét és lassítja a műveleteket. Mindig csak a hivatkozást (URL-t vagy elérési utat) tárold!
+
+cim (varchar): Rendben van.
+
+ar (int): Ez a mező kérdéses. Mire vonatkozik az ár? A könyv beszerzési ára? Kölcsönzési díj? Ha kölcsönzési díj, az valószínűleg nem a könyv alapadata, hanem a kölcsönzési tranzakció része. Ha a beszerzési ár, akkor rendben van, de érdemes lehet DECIMAL típust használni pénzösszegekhez az int helyett (pl. DECIMAL(10,2)).
+
+konyv_adat_id (bigint): Ez egy külső kulcs a konyv_adatok táblához. Ez a struktúra azt sugallja, hogy a konyvek tábla az egyes fizikai példányokat reprezentálja, míg a konyv_adatok tábla a könyv metaadatait (cím, szerző, műfaj stb.) tárolja. Ez egy jó megközelítés egy könyvtári rendszerhez, ahol több példány is lehet ugyanabból a könyvből.
+
+2. konyv_adatok tábla:
+
+id (bigint): Primer kulcs, rendben.
+
+mufaj (varchar): Rendben van, de ha egy könyvnek több műfaja is lehet, vagy szeretnéd szabványosítani a műfajokat (hogy ne lehessen elgépelni pl. "Fantasy" és "fantazy"), akkor érdemesebb lenne egy külön mufajok táblát létrehozni, és egy összekötő táblával (many-to-many kapcsolat) kezelni.
+
+szerzo (varchar): Ugyanaz igaz rá, mint a műfajra. Ha egy könyvnek több szerzője is lehet, vagy szeretnéd szabványosítani a szerzők neveit, akkor egy külön szerzok tábla és egy összekötő tábla (many-to-many) jobb megoldás.
+
+darab_szam (int): Ez a mező problémás a jelenlegi struktúrában. Ha a konyvek tábla az egyes fizikai példányokat tárolja, akkor a darab_szam mezőnek nincs értelme a konyv_adatok táblában. A rendelkezésre álló példányok számát úgy kapod meg, hogy megszámolod, hány bejegyzés van a konyvek táblában az adott konyv_adat_id-hez. Ezt a mezőt érdemes lenne kivenni.
+
+oldalszam (int): Rendben van.
+
+3. emberek tábla:
+
+id (bigint): Primer kulcs, rendben.
+
+jelszo (varchar): Nagyon fontos: A jelszót soha ne tárold sima szövegként az adatbázisban! Mindig hasheld (pl. bcrypt) és sózd! A varchar típus rendben van a hashelt jelszónak.
+
+nev (varchar): Rendben van.
+
+icon (varchar): Felhasználói profilkép URL-je/elérési útja, rendben.
+
+konyv_id (int): Ez a mező a legnagyobb probléma. Ha ez azt jelenti, hogy "melyik könyvet kölcsönözte ki az illető", akkor csak egyetlen könyvet engedélyez felhasználónként, ami egy könyvtári rendszerben nem reális. Ha azt jelenti, hogy "kedvenc könyve", akkor is csak egyet engedélyez. Egy felhasználó több könyvet is kölcsönözhet, és egy könyvet több felhasználó is kölcsönözhet az idő múlásával. Ehhez egy köztes táblára van szükség (many-to-many kapcsolat).
+
+kedvelt (boolean): Ez a mező is problémás. Mit kedvel? Ha egy könyvet, akkor melyiket? Ez is egy many-to-many kapcsolatot igényelne a felhasználók és a könyvek között (pl. egy kedvenc_konyvek tábla). Ha valami általános "felhasználó kedvel valamit" flag, akkor túl homályos.
+
+Javasolt fejlesztések és egy átdolgozott séma:
+Ahhoz, hogy a rendszered rugalmasabb és funkciókban gazdagabb legyen, a következő módosításokat javaslom:
+
+A konyvek és konyv_adatok szétválasztása: A jelenlegi megközelítésed jó, de finomítsuk. A konyv_adatok tárolja a könyv általános adatait (amik minden példányra igazak), a konyvek pedig az egyes fizikai példányokat.
+
+Many-to-many kapcsolatok kezelése:
+
+Szerzők: Egy könyvnek lehet több szerzője, egy szerzőnek több könyve.
+
+Műfajok: Egy könyvnek lehet több műfaja, egy műfajhoz több könyv tartozhat.
+
+Kölcsönzések: Egy felhasználó több könyvet kölcsönözhet, egy könyvet több felhasználó is kölcsönözhet (különböző időpontokban).
+
+Kedvencek: Egy felhasználónak több kedvenc könyve is lehet.
+
+Adattípusok és mezők:
+
+Pénzösszegekhez DECIMAL (pl. DECIMAL(10,2)).
+
+Dátumokhoz DATE vagy DATETIME.
+
+Fontos az ISBN szám a könyv metaadatokhoz.
+
+Íme egy javasolt, átdolgozott adatbázis séma:
+
+Kódrészlet
+
+erDiagram
+    FELHASZNALOK {
+        BIGINT id PK
+        VARCHAR nev
+        VARCHAR email UNIQUE
+        VARCHAR jelszo_hash "fontos: hashelve tarolni!"
+        VARCHAR profil_kep_url NULL
+        DATETIME regisztracio_datuma
+    }
+
+    KONYV_ADATOK {
+        BIGINT id PK
+        VARCHAR cim
+        INT oldalszam
+        INT kiadas_eve NULL
+        VARCHAR kiado NULL
+        VARCHAR isbn UNIQUE NULL "Egyedi konyvazonosito"
+        TEXT leiras NULL
+    }
+
+    SZERZOK {
+        BIGINT id PK
+        VARCHAR nev
+    }
+
+    MUFAJOK {
+        BIGINT id PK
+        VARCHAR nev UNIQUE
+    }
+
+    KONYVEK {
+        BIGINT id PK "Egyedi azonosito minden fizikai peldanynak"
+        BIGINT konyv_adat_id FK "Hivatkozas a konyv metaadataira"
+        VARCHAR konyv_kep_url NULL "Boritokep URL-je"
+        VARCHAR allapot "pl. 'elerheto', 'kolcsonozve', 'elveszett'"
+        DECIMAL(10,2) beszerzesi_ar NULL
+        VARCHAR raktari_hely NULL
+    }
+
+    KOLCSONZESEK {
+        BIGINT id PK
+        BIGINT felhasznalo_id FK
+        BIGINT konyv_id FK "A konkret fizikai peldany ID-ja"
+        DATETIME kolcsonzes_datuma
+        DATETIME hatarido_datuma
+        DATETIME visszavetel_datuma NULL "NULL, ha meg kolcsonozve van"
+    }
+
+    KEDVENC_KONYVEK {
+        BIGINT felhasznalo_id PK,FK
+        BIGINT konyv_adat_id PK,FK "A konyv metaadataihoz linkel, nem egy konkret peldanyhoz"
+    }
+
+    KONYV_SZERZO {
+        BIGINT konyv_adat_id PK,FK
+        BIGINT szerzo_id PK,FK
+    }
+
+    KONYV_MUFAJ {
+        BIGINT konyv_adat_id PK,FK
+        BIGINT mufaj_id PK,FK
+    }
+
+    FELHASZNALOK ||--o{ KOLCSONZESEK : "kolcsonoz"
+    KONYVEK ||--o{ KOLCSONZESEK : "kolcsonozve"
+    FELHASZNALOK ||--o{ KEDVENC_KONYVEK : "kedvel"
+    KONYV_ADATOK ||--o{ KEDVENC_KONYVEK : "kedvelt_konyv"
+    KONYV_ADATOK ||--o{ KONYVEK : "rendelkezik_pelda_nyokkal"
+    KONYV_ADATOK ||--o{ KONYV_SZERZO : "szerzoi_kapcsolat"
+    SZERZOK ||--o{ KONYV_SZERZO : "szerzoi_kapcsolat"
+    KONYV_ADATOK ||--o{ KONYV_MUFAJ : "mufaji_kapcsolat"
+    MUFAJOK ||--o{ KONYV_MUFAJ : "mufaji_kapcsolat"
+Magyarázat a változtatásokhoz:
+
+FELHASZNALOK (Users):
+
+email mező hozzáadva (loginhez és értesítésekhez).
+
+jelszo_hash a biztonságos jelszótároláshoz.
+
+profil_kep_url az icon helyett.
+
+regisztracio_datuma a regisztráció idejének rögzítésére.
+
+konyv_id és kedvelt mezők eltávolítva, ezeket külön táblák kezelik.
+
+KONYV_ADATOK (Book Metadata):
+
+isbn (International Standard Book Number) hozzáadva. Ez egy egyedi azonosító a könyvekhez, nagyon hasznos lehet külső API-k (pl. Google Books API) használatához a könyv adatok automatikus feltöltéséhez.
+
+kiado és kiadas_eve hozzáadva.
+
+leiras mező a könyv rövid leírásához.
+
+darab_szam eltávolítva.
+
+SZERZOK (Authors) és KONYV_SZERZO (Book-Author Link):
+
+Lehetővé teszi több szerző hozzárendelését egy könyvhöz, és egy szerző több könyvét is kezelni tudod.
+
+MUFAJOK (Genres) és KONYV_MUFAJ (Book-Genre Link):
+
+Lehetővé teszi több műfaj hozzárendelését egy könyvhöz, és szabványosítja a műfajok listáját.
+
+KONYVEK (Physical Copies):
+
+konyv_kep_url az konyv_kep helyett.
+
+allapot mező (pl. "elérhető", "kölcsönözve", "elveszett", "javítás alatt") a fizikai példány állapotának nyomon követésére.
+
+beszerzesi_ar (ha szükséges).
+
+raktari_hely (opcionális, ha fizikai elhelyezést is akarsz kezelni).
+
+KOLCSONZESEK (Borrowings):
+
+Ez a kulcsfontosságú tábla a kölcsönzések kezelésére.
+
+felhasznalo_id (FK a FELHASZNALOK-hoz).
+
+konyv_id (FK a KONYVEK-hez, azaz a konkrét fizikai példányhoz).
+
+kolcsonzes_datuma, hatarido_datuma, visszavetel_datuma (ez utóbbi NULL amíg a könyv kölcsönözve van).
+
+KEDVENC_KONYVEK (Favorite Books):
+
+Ez egy összekötő tábla a felhasználók és a könyv metaadatok között.
+
+felhasznalo_id (FK a FELHASZNALOK-hoz).
+
+konyv_adat_id (FK a KONYV_ADATOK-hoz, azaz a könyv típusához, nem egy konkrét példányhoz).
+
+Ez a séma sokkal rugalmasabb és jobban kezeli a valós könyvtári forgatókönyveket. Remélem, ez segít a projektben! Sok sikert hozzá!
+
+
+
+
+
+
+nekem kicsit tul szerteágazónak tünik mint a mufajok és könyv_mufaj. nem lehetne ezt egyszerüben minthogy minden mufajnak lenne egy ID ja és a könyvek azokra az id-k ra hivatkoznak
+
+
+
+Igazad van, a túl sok tábla kezdetben bonyolultnak tűnhet, és egy nyári projektnél érdemes egyensúlyt találni az egyszerűség és a rugalmasság között.
+
+Ami a mufajok és konyv_mufaj táblákat illeti, teljesen jó az az ötlet, hogy minden műfajnak legyen egy ID-ja, és a könyvek erre az ID-ra hivatkozzanak. Ez az, amit a konyv_mufaj tábla tesz, méghozzá úgy, hogy egy könyvhöz több műfaj is tartozhat, és egy műfajhoz több könyv is. Ezt hívják many-to-many (sok-sok) kapcsolatnak.
+
+Ha viszont ragaszkodsz ahhoz, hogy EGY könyvnek CSAK EGY műfaja lehessen, akkor valóban sokkal egyszerűbb a helyzet, és teljesen felesleges a konyv_mufaj összekötő tábla.
+
+Egyszerűsített megoldás (ha EGY könyvnek CSAK EGY műfaja van):
+
+MUFAJOK tábla:
+
+id (BIGINT, PK)
+
+nev (VARCHAR, UNIQUE) - A műfaj neve (pl. "Fantasy", "Sci-fi", "Thriller").
+
+Ez a tábla továbbra is hasznos, mert így standardizálhatod a műfajokat, és nem írod el őket (pl. "Fantasy" vs. "Fantazy").
+
+KONYV_ADATOK tábla:
+
+Hozzáadsz egy mufaj_id mezőt.
+
+mufaj_id (BIGINT, FK a MUFAJOK.id-ra) - Ez hivatkozik a MUFAJOK tábla egy adott műfajára.
+
+Példa a KONYV_ADATOK tábla módosítására (egyszerűsített műfaj kezelésnél):
+
+KONYV_ADATOK
+- id
+- cim
+- oldalszam
+- kiadas_eve
+- kiado
+- isbn
+- leiras
+- **mufaj_id (FOREIGN KEY -> MUFAJOK.id)**
+Ez a séma akkor működik jól, ha:
+
+Egy könyvnek csak egy műfaja van.
+
+Nem akarod, hogy egy könyv egyszerre legyen "Fantasy" ÉS "Kaland" pl.
+
+Mi a hátránya ennek az egyszerűsítésnek?
+
+Ha később rájönnél, hogy mégis szeretnéd, ha egy könyv több műfajba is tartozhatna (pl. "sci-fi fantasy", vagy "krimi thriller"), akkor ezt a struktúrát át kellene alakítanod, és vissza kellene térned a konyv_mufaj összekötő táblához.
+
+A szerzo (szerzők) táblára ugyanez vonatkozik:
+Ha ragaszkodsz ahhoz, hogy EGY könyvnek CSAK EGY szerzője lehet, akkor:
+
+Létrehozod a SZERZOK táblát (id, nev).
+
+Hozzáadsz egy szerzo_id mezőt a KONYV_ADATOK táblához, ami a SZERZOK.id-ra hivatkozik.
+
+Összefoglalva:
+
+Jelenlegi javaslatom (many-to-many): Rugalmasabb, de több tábla. Egy könyvhöz több műfaj/szerző is rendelhető.
+
+A te ötleted (one-to-many): Egyszerűbb, kevesebb tábla. Egy könyvhöz csak egy műfaj/szerző rendelhető.
+
+Melyiket válaszd?
+
+Ha biztos vagy benne, hogy egy könyvnek MINDIG csak egy műfaja és EGY szerzője lesz: Válaszd az egyszerűsített megoldást (mufaj_id és szerzo_id közvetlenül a KONYV_ADATOK táblában). Ez kevesebb táblát és egyszerűbb lekérdezéseket jelent.
+
+Ha szeretnél rugalmasabb lenni, és elképzelhető, hogy egy könyv több kategóriába is tartozik vagy több szerzője van: Maradj a KONYV_MUFAJ és KONYV_SZERZO összekötő tábláknál. Ez a skálázhatóbb megoldás hosszú távon, és a helyes adatbázis normalizációt követi.
+
+Egy nyári projekthez, ha az egyszerűség a fő cél, és nem akarsz túlzott komplexitást, akkor az "egy könyv = egy műfaj/szerző" megközelítés tökéletesen elegendő lehet. Csak gondold végig, mennyire szeretnéd, hogy a könyvtárad sokoldalú legyen ezen a téren.
+
+
+
+
+
+
+az egészet röviditsd le és mySQL módban add visza
+
+
+Rendben, itt van az egyszerűsített adatbázis séma MySQL szintaxissal, az "egy könyv = egy műfaj" és "egy könyv = egy szerző" elvet követve, valamint a kölcsönzések és kedvencek tábláival:
+
+SQL
+
+-- Adatbázis létrehozása (ha még nincs)
+CREATE DATABASE IF NOT EXISTS konyvtar_db;
+USE konyvtar_db;
+
+-- Felhasználók (emberek) tábla
+CREATE TABLE felhasznalok (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    nev VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    jelszo_hash VARCHAR(255) NOT NULL COMMENT 'A jelszot hashelve taroljuk!',
+    profil_kep_url VARCHAR(255) DEFAULT NULL,
+    regisztracio_datuma DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Műfajok tábla (standardizált műfajnevekhez)
+CREATE TABLE mufajok (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    nev VARCHAR(255) UNIQUE NOT NULL
+);
+
+-- Szerzők tábla (standardizált szerzőnevekhez)
+CREATE TABLE szerzok (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    nev VARCHAR(255) NOT NULL
+);
+
+-- Könyv metaadatok tábla (a könyv általános adatai)
+CREATE TABLE konyv_adatok (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    cim VARCHAR(255) NOT NULL,
+    oldalszam INT,
+    kiadas_eve INT DEFAULT NULL,
+    kiado VARCHAR(255) DEFAULT NULL,
+    isbn VARCHAR(255) UNIQUE DEFAULT NULL COMMENT 'Nemzetkozi szabvany konyvszam',
+    leiras TEXT DEFAULT NULL,
+    mufaj_id BIGINT, -- Külső kulcs a mufajok táblához
+    szerzo_id BIGINT, -- Külső kulcs a szerzok táblához
+    FOREIGN KEY (mufaj_id) REFERENCES mufajok(id) ON DELETE SET NULL,
+    FOREIGN KEY (szerzo_id) REFERENCES szerzok(id) ON DELETE SET NULL
+);
+
+-- Könyvek tábla (fizikai példányok)
+CREATE TABLE konyvek (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    konyv_adat_id BIGINT NOT NULL, -- Hivatkozás a konyv_adatok táblára
+    konyv_kep_url VARCHAR(255) DEFAULT NULL COMMENT 'Boritokep URL-je',
+    allapot VARCHAR(50) NOT NULL DEFAULT 'elerheto' COMMENT 'pl. elerheto, kolcsonozve, elveszett, javitás alatt',
+    beszerzesi_ar DECIMAL(10,2) DEFAULT NULL,
+    raktari_hely VARCHAR(100) DEFAULT NULL,
+    FOREIGN KEY (konyv_adat_id) REFERENCES konyv_adatok(id) ON DELETE CASCADE
+);
+
+-- Kölcsönzések tábla
+CREATE TABLE kolcsonzesek (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    felhasznalo_id BIGINT NOT NULL, -- Ki kolcsonozte ki
+    konyv_id BIGINT NOT NULL, -- Melyik konkret fizikai peldanyt
+    kolcsonzes_datuma DATETIME DEFAULT CURRENT_TIMESTAMP,
+    hatarido_datuma DATETIME NOT NULL,
+    visszavetel_datuma DATETIME DEFAULT NULL COMMENT 'NULL, ha meg kolcsonozve van',
+    FOREIGN KEY (felhasznalo_id) REFERENCES felhasznalok(id) ON DELETE CASCADE,
+    FOREIGN KEY (konyv_id) REFERENCES konyvek(id) ON DELETE CASCADE
+);
+
+-- Kedvenc könyvek tábla (felhasználó kedvencei)
+CREATE TABLE kedvenc_konyvek (
+    felhasznalo_id BIGINT NOT NULL,
+    konyv_adat_id BIGINT NOT NULL, -- Itt a konyv_adatok ID-ja kell, nem egy konkret peldanye
+    PRIMARY KEY (felhasznalo_id, konyv_adat_id),
+    FOREIGN KEY (felhasznalo_id) REFERENCES felhasznalok(id) ON DELETE CASCADE,
+    FOREIGN KEY (konyv_adat_id) REFERENCES konyv_adatok(id) ON DELETE CASCADE
+);
+
+
+
+
+
+
+5-darab adatot kérek bele csak a könyvet mySQL adatként
+
+
+Rendben, itt van 5 példa adat a konyvek táblába, figyelembe véve a legutóbbi egyszerűsített sémát. Ahhoz, hogy ezeket beszúrhasd, először szükséged lesz adatokra a mufajok, szerzok és konyv_adatok táblákban, mivel a konyvek tábla hivatkozik a konyv_adatok táblára.
+
+Először tegyük fel, hogy a következő ID-k léteznek (ha a te adatbázisodban más ID-k generálódnak, ezeket cseréld ki!):
+
+mufajok tábla:
+
+'Fantasy' -> ID: 1
+
+'Sci-fi' -> ID: 2
+
+'Thriller' -> ID: 3
+
+'Ifjúsági' -> ID: 4
+
+'Kaland' -> ID: 5
+
+szerzok tábla:
+
+'J.K. Rowling' -> ID: 1
+
+'Isaac Asimov' -> ID: 2
+
+'Stephen King' -> ID: 3
+
+'Fekete István' -> ID: 4
+
+'Arthur Conan Doyle' -> ID: 5
+
+Most beszúrok néhány példa konyv_adatok bejegyzést, majd utána a konyvek bejegyzéseket.
+
+1. Példa adatok a mufajok táblába (ha még nincsenek):
+
+SQL
+
+INSERT INTO mufajok (nev) VALUES
+('Fantasy'),
+('Sci-fi'),
+('Thriller'),
+('Ifjúsági'),
+('Kaland');
+2. Példa adatok a szerzok táblába (ha még nincsenek):
+
+SQL
+
+INSERT INTO szerzok (nev) VALUES
+('J.K. Rowling'),
+('Isaac Asimov'),
+('Stephen King'),
+('Fekete István'),
+('Arthur Conan Doyle');
+3. Példa adatok a konyv_adatok táblába (5 darab):
+
+SQL
+
+INSERT INTO konyv_adatok (cim, oldalszam, kiadas_eve, kiado, isbn, leiras, mufaj_id, szerzo_id) VALUES
+('Harry Potter és a bölcsek köve', 300, 1997, 'Animus Kiadó', '9789639162002', 'Harry Potter első kalandja a varázsvilágban.', 1, 1),
+('Én, a robot', 253, 1950, 'Gabo Könyvkiadó', '9789639635034', 'Klasszikus sci-fi novellák a robotika etikájáról.', 2, 2),
+('AZ', 1138, 1986, 'Európa Könyvkiadó', '9789630784260', 'Derry városának rettegett szörnye.', 3, 3),
+('Vuk', 128, 1965, 'Móra Könyvkiadó', '9789631182283', 'A kis róka kalandjai az erdőben.', 4, 4),
+('A Sárga Arc', 64, 1893, 'Partvonal Kiadó', '9789639633818', 'Sherlock Holmes egyik különös esete.', 5, 5);
+Fontos: Az konyv_adatok tábla id mezője automatikusan generálódik (AUTO_INCREMENT). A fenti beszúrások után feltételezhetjük, hogy az ID-k 1-től 5-ig fognak futni. Ha már vannak más bejegyzések a táblában, akkor ellenőrizd az aktuális ID-kat, és használd azokat az alábbi INSERT utasításban!
+
+4. 5 darab adat a konyvek táblába (fizikai példányok):
+
+SQL
+
+INSERT INTO konyvek (konyv_adat_id, konyv_kep_url, allapot, beszerzesi_ar, raktari_hely) VALUES
+-- Harry Potter és a bölcsek köve (konyv_adat_id = 1)
+(1, 'https://example.com/hp1_kep1.jpg', 'elerheto', 3500.00, 'A1-01'),
+(1, 'https://example.com/hp1_kep2.jpg', 'kolcsonozve', 3500.00, 'A1-02'),
+-- Én, a robot (konyv_adat_id = 2)
+(2, 'https://example.com/robot_kep1.jpg', 'elerheto', 2800.00, 'B2-05'),
+-- AZ (konyv_adat_id = 3)
+(3, 'https://example.com/az_kep1.jpg', 'elerheto', 5000.00, 'C3-02'),
+-- Vuk (konyv_adat_id = 4)
+(4, 'https://example.com/vuk_kep1.jpg', 'kolcsonozve', 1500.00, 'D1-10');
+Magyarázat:
+
+Minden konyvek bejegyzés egy fizikai könyv példányt reprezentál.
+
+konyv_adat_id: Ez a kulcs mondja meg, hogy melyik könyvcímhez (metaadatokhoz) tartozik a példány. Láthatod, hogy "Harry Potter és a bölcsek köve" (ID: 1) két különböző fizikai példánnyal is szerepel.
+
+konyv_kep_url: Helyettesítsd valós URL-ekkel, ha vannak.
+
+allapot: Jelzi, hogy a könyv elérhető-e vagy kölcsönözve van.
+
+beszerzesi_ar: Példa beszerzési árak.
+
+raktari_hely: Példa raktári helyek.
+
+Ezeket az INSERT utasításokat futtathatod a MySQL kliensben (pl. MySQL Workbench, phpMyAdmin, vagy a parancssorból), miután létrehoztad a táblákat a korábban megadott CREATE TABLE szkripttel.
